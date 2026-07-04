@@ -1,6 +1,5 @@
 import math
 import re
-from collections import Optional
 
 
 def fn_add_numbers(a: int | float, b: int | float) -> int | float:
