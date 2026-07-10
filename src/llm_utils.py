@@ -1,9 +1,6 @@
+from typing import Any, Optional
 import llm_sdk as llm
-
-
-def choose_next_token_id(logits: list) -> int:
-    """ """
-    return max(range(len(logits)), key=logits.__getitem__)
+import functions as f
 
 
 def get_logits_from_text(text: str, model: llm.Small_LLM_Model) -> list:
@@ -11,12 +8,44 @@ def get_logits_from_text(text: str, model: llm.Small_LLM_Model) -> list:
     return model.get_logits_from_input_ids(model.encode(text)[0].tolist())
 
 
+def choose_next_token_id(
+        logits: list,
+        allowed: Optional[list] = None
+    ) -> int:
+    """ """
+    if allowed and allowed is not []:
+        return max(allowed, key=lambda token_id: logits[token_id])
+    return max(range(len(logits)), key=logits.__getitem__)
+
+
+def choose_function(prompt: str, model: llm.Small_LLM_Model) -> dict[str, Any]:
+    """ """
+    allowed_function_names = [
+        " fn_add_numbers",
+        " fn_get_square_root",
+        " fn_greet",
+        " fn_reverse_string",
+        " fn_substitute_string_with_regex",
+    ]
+    allowed_token_ids = [
+        model.encode(name)[0].tolist()[0]
+        for name in allowed_function_names
+    ]
+    for _ in range(5):
+        logits = get_logits_from_text(prompt, model)
+        next_token_id = choose_next_token_id(
+            logits, allowed=allowed_token_ids)
+        prompt += model.decode(next_token_id)
+    return prompt
+
+
+
 if __name__ == "__main__":
     model = llm.Small_LLM_Model()
     string = "Every Canadian is born"
     input_ids = model.encode(string)[0].tolist()
 
-    for _ in range(25):
+    for _ in range(55):
         logits = model.get_logits_from_input_ids(input_ids)
         next_token_id = choose_next_token_id(logits)
         input_ids.append(next_token_id)
@@ -66,3 +95,4 @@ if __name__ == "__main__":
         allowed_token_ids,
         key=lambda token_id: logits[token_id],
     )
+    print(choose_function(question, model))
