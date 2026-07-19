@@ -18,7 +18,7 @@ def choose_next_token_id(
     return max(range(len(logits)), key=logits.__getitem__)
 
 
-def choose_function(prompt: str, model: llm.Small_LLM_Model) -> dict[str, Any]:
+def choose_function(prompt: str, model: llm.Small_LLM_Model) -> str:
     """ """
     allowed_function_names = [
         " fn_add_numbers",
@@ -28,21 +28,38 @@ def choose_function(prompt: str, model: llm.Small_LLM_Model) -> dict[str, Any]:
         " fn_substitute_string_with_regex",
     ]
     allowed_token_ids = [
-        model.encode(name)[0].tolist()[0]
+        model.encode(name)[0].tolist()
         for name in allowed_function_names
     ]
-    for _ in range(5):
-        logits = get_logits_from_text(prompt, model)
+
+    generated_tokens: list[int] = []
+    original_prompt = prompt
+
+    while generated_tokens not in allowed_token_ids:
+        possible_next_tokens = []
+
+        for token_ids in allowed_token_ids:
+            if token_ids[:len(generated_tokens)] == generated_tokens:
+                if len(token_ids) > len(generated_tokens):
+                    possible_next_tokens.append(token_ids[len(generated_tokens)])
+
+        logits = model.get_logits_from_input_ids(
+            model.encode(original_prompt)[0].tolist() + generated_tokens
+        )
+
         next_token_id = choose_next_token_id(
-            logits, allowed=allowed_token_ids)
-        prompt += model.decode(next_token_id)
-    return prompt
+            logits,
+            allowed=possible_next_tokens,
+        )
+        generated_tokens.append(next_token_id)
+
+    return model.decode(generated_tokens).strip()
 
 
 
 if __name__ == "__main__":
     model = llm.Small_LLM_Model()
-    string = "Every Canadian is born"
+    string = "Tio Chico tinha um sítio"
     input_ids = model.encode(string)[0].tolist()
 
     for _ in range(55):
