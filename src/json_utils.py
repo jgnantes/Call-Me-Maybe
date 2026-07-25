@@ -94,14 +94,16 @@ def dump_function_call_results(
     ]
 
     with output_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2)
+        json.dump(data, file, indent=2, ensure_ascii=False)
         file.write("\n")
 
 
 if __name__=="__main__":
-    input = load_prompt_input_file("data/input/function_calling_tests.json")
-    functions = load_function_definition_file(
+    inputs = load_prompt_input_file("data/input/function_calling_tests.json")
+    print(inputs.prompts[0].prompt)
+    outputs = load_function_definition_file(
         "data/input/functions_definition.json")
+    print(outputs.functions[0].parameters)
     result = FunctionCallResult(
         prompt="what is 2 plus 2 equal to?",
         name="fn_add_numbers",
