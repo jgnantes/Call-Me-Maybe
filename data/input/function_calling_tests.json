@@ -18,16 +18,37 @@
     "prompt": "Reverse the string 'world'"
   },
   {
+    "prompt": "Reverse the word AMAZING"
+  },
+  {
+    "prompt": "Reverse the sentence: Is it could in the water?"
+  },
+  {
+    "prompt": "Reverse Cleric"
+  },
+  {
     "prompt": "What is the square root of 16?"
   },
   {
     "prompt": "Calculate the square root of 144"
   },
   {
+    "prompt": "Be a body"
+  },
+  {
+    "prompt": "Calcule a soma entre -42 e 100"
+  },
+  {
     "prompt": "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS"
   },
   {
     "prompt": "Replace all vowels in 'Programming is fun' with asterisks"
+  },
+  {
+    "prompt": "Lance a braba"
+  },
+  {
+    "prompt": "Replace uppercase letters in the sentence 'Atirei O Pau No Gato' with 0"
   },
   {
     "prompt": "Substitute the word 'cat' with 'dog' in 'The cat sat on the mat with another cat'"

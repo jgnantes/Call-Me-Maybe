@@ -1,7 +1,6 @@
-from typing import Any, Optional
-from models import FunctionDefinition
+from typing import Optional
+from .models import FunctionDefinition
 import llm_sdk as llm
-import functions as f
 
 
 def get_input_ids(text: str, model: llm.Small_LLM_Model) -> list[int]:

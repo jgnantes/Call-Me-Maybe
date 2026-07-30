@@ -1,15 +1,48 @@
 import re
-import llm_sdk as llm
 from typing import Any
-from decoding_utils import (
+import llm_sdk as llm
+from .decoding_utils import (
     choose_from_allowed_texts,
     choose_function,
 )
-from models import (
+from .models import (
     FunctionCallResult,
     FunctionDefinition,
+    TypeDefinition,
     validate_call_against_definition,
 )
+
+
+REGEX_PATTERN_CANDIDATES = [
+    r"\d+",
+    r"\D+",
+    r"[A-Z]",
+    r"[a-z]",
+    r"[aeiouAEIOU]",
+    r"\w+",
+    r"\s+",
+]
+
+
+def deduplicate_preserving_order(values: list[str]) -> list[str]:
+    """Remove duplicate strings while preserving their first occurrence.
+
+    Args:
+        values: String values to deduplicate.
+
+    Returns:
+        Deduplicated values in their original order.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for value in values:
+        clean_value = value.strip()
+        if clean_value and clean_value not in seen:
+            seen.add(clean_value)
+            result.append(clean_value)
+
+    return result
 
 
 def extract_words_from_prompt(prompt: str) -> list[str]:
@@ -24,25 +57,16 @@ def extract_words_from_prompt(prompt: str) -> list[str]:
     return re.findall(r"[A-Za-z_]+", prompt)
 
 
-def extract_numbers_from_prompt(prompt: str) -> list[int | float]:
-    """Extract numeric values from a natural-language prompt.
+def extract_number_texts_from_prompt(prompt: str) -> list[str]:
+    """Extract numeric strings from a natural-language prompt.
 
     Args:
         prompt: Natural-language request to inspect.
 
     Returns:
-        Numeric values found in the prompt, preserving their order.
+        Numeric strings found in the prompt, preserving their order.
     """
-    matches = re.findall(r"-?\d+(?:\.\d+)?", prompt)
-    numbers: list[int | float] = []
-
-    for match in matches:
-        if "." in match:
-            numbers.append(float(match))
-        else:
-            numbers.append(int(match))
-
-    return numbers
+    return re.findall(r"-?\d+(?:\.\d+)?", prompt)
 
 
 def extract_quoted_strings_from_prompt(prompt: str) -> list[str]:
@@ -52,65 +76,185 @@ def extract_quoted_strings_from_prompt(prompt: str) -> list[str]:
         prompt: Natural-language request to inspect.
 
     Returns:
-        Strings found between single or double quotes.
+        Strings found between matching single or double quotes.
     """
-    return re.findall(r"""["']([^"']*)["']""", prompt)
+    matches = re.findall(r"""(["'])(.*?)\1""", prompt)
+    return [
+        match[1]
+        for match in matches
+    ]
 
 
-def build_string_argument_prompt(
+def collect_text_candidates(prompt: str) -> list[str]:
+    """Collect text candidates from a prompt.
+
+    Args:
+        prompt: Natural-language request to inspect.
+
+    Returns:
+        Candidate text values found in the prompt.
+    """
+    words = prompt.split()
+    candidates: list[str] = []
+
+    candidates.extend(extract_quoted_strings_from_prompt(prompt))
+    candidates.extend(extract_number_texts_from_prompt(prompt))
+    candidates.extend(extract_words_from_prompt(prompt))
+
+    for start_index in range(1, min(len(words), 4)):
+        candidates.append(" ".join(words[start_index:]))
+
+    if ":" in prompt:
+        candidates.append(prompt.split(":", 1)[1])
+
+    candidates.append(prompt)
+
+    return deduplicate_preserving_order(candidates)
+
+
+def collect_candidates_for_parameter(
+        prompt: str,
+        parameter_name: str,
+        parameter_definition: TypeDefinition,
+        selected_parameters: dict[str, Any],
+) -> list[str]:
+    """Collect candidates suitable for a specific parameter.
+
+    Args:
+        prompt: Natural-language request to inspect.
+        parameter_name: Name of the parameter being extracted.
+        parameter_definition: Type definition for the parameter.
+        selected_parameters: Parameters already selected for this function
+            call.
+
+    Returns:
+        Candidate values for the parameter.
+    """
+    if parameter_definition.type == "number":
+        numbers = extract_number_texts_from_prompt(prompt)
+        used_numbers = {
+            str(value)
+            for value in selected_parameters.values()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+        unused_numbers = [
+            number
+            for number in numbers
+            if number not in used_numbers
+        ]
+        return unused_numbers or numbers or ["0"]
+
+    if parameter_definition.type == "boolean":
+        return ["true", "false"]
+
+    candidates = collect_text_candidates(prompt)
+
+    if parameter_name == "regex":
+        candidates = REGEX_PATTERN_CANDIDATES + candidates
+
+    if "source" in parameter_name:
+        candidates = (
+            extract_quoted_strings_from_prompt(prompt)
+            + candidates
+        )
+
+    if "replacement" in parameter_name:
+        candidates = extract_words_from_prompt(prompt) + candidates
+
+    if parameter_definition.type == "object":
+        candidates = ["{}"] + candidates
+
+    if parameter_definition.type == "array":
+        candidates = ["[]"] + candidates
+
+    return deduplicate_preserving_order(candidates)
+
+
+def build_argument_selection_prompt(
         prompt: str,
         function: FunctionDefinition,
         parameter_name: str,
+        parameter_definition: TypeDefinition,
+        candidates: list[str],
+        selected_parameters: dict[str, Any],
 ) -> str:
-    """Build a prompt for selecting a string argument value.
+    """Build a prompt for selecting a function argument.
 
     Args:
         prompt: Natural-language request containing the argument.
         function: Function definition that expects the argument.
         parameter_name: Name of the parameter to extract.
+        parameter_definition: Type definition for the parameter.
+        candidates: Candidate values available for selection.
+        selected_parameters: Parameters already selected for this function
+            call.
 
     Returns:
         Prompt asking the model to select the parameter value.
     """
+    candidate_lines = [
+        f"- {candidate}"
+        for candidate in candidates
+    ]
+    selected_lines = [
+        f"{name} = {value}"
+        for name, value in selected_parameters.items()
+    ]
+    selected_block = "\n".join(selected_lines) or "None"
+
     return (
-        "Select the value for the function parameter.\n"
-        f"User request: {prompt}\n"
-        f"Function: {function.name}\n"
-        f"Function description: {function.description}\n"
-        f"Parameter: {parameter_name}\n"
-        "Value:"
+        "Select exactly one value for the current function parameter.\n"
+        "Use the user request, the selected function, and the already "
+        "selected parameters as context.\n\n"
+        f"User request:\n{prompt}\n\n"
+        f"Selected function:\n{function.name}\n\n"
+        f"Function description:\n{function.description}\n\n"
+        f"Current parameter:\n{parameter_name}\n\n"
+        f"Current parameter type:\n{parameter_definition.type}\n\n"
+        f"Already selected parameters:\n{selected_block}\n\n"
+        "Allowed values:\n"
+        + "\n".join(candidate_lines)
+        + "\n\nValue:"
     )
 
 
-def choose_string_argument(
+def choose_argument_text(
         prompt: str,
         function: FunctionDefinition,
         parameter_name: str,
+        parameter_definition: TypeDefinition,
         candidates: list[str],
+        selected_parameters: dict[str, Any],
         model: llm.Small_LLM_Model,
 ) -> str:
-    """Choose a string argument from candidate words.
+    """Choose an argument value as text using constrained decoding.
 
     Args:
         prompt: Natural-language request containing the argument.
         function: Function definition that expects the argument.
-        parameter_name: Name of the string parameter to extract.
-        candidates: Candidate string values found in the prompt.
+        parameter_name: Name of the parameter to extract.
+        parameter_definition: Type definition for the parameter.
+        candidates: Candidate values available for selection.
+        selected_parameters: Parameters already selected for this function
+            call.
         model: LLM wrapper used for constrained decoding.
 
     Returns:
-        Selected string argument.
+        Selected argument value as text.
 
     Raises:
-        ValueError: If no candidate values are available.
+        ValueError: If no candidates are available.
     """
     if not candidates:
-        raise ValueError(f"missing string candidates for {parameter_name}")
+        raise ValueError(f"missing candidates for {parameter_name}")
 
-    argument_prompt = build_string_argument_prompt(
+    argument_prompt = build_argument_selection_prompt(
         prompt,
         function,
         parameter_name,
+        parameter_definition,
+        candidates,
+        selected_parameters,
     )
     allowed_texts = [
         f" {candidate}"
@@ -124,6 +268,34 @@ def choose_string_argument(
     ).strip()
 
 
+def coerce_argument_value(
+        value: str,
+        parameter_definition: TypeDefinition,
+) -> Any:
+    """Convert a selected argument string into its schema type.
+
+    Args:
+        value: Selected argument value as text.
+        parameter_definition: Type definition expected by the schema.
+
+    Returns:
+        Value converted to the expected type.
+    """
+    if parameter_definition.type == "number":
+        return float(value) if "." in value else int(value)
+
+    if parameter_definition.type == "boolean":
+        return value.strip().lower() == "true"
+
+    if parameter_definition.type == "object":
+        return {}
+
+    if parameter_definition.type == "array":
+        return []
+
+    return value
+
+
 def extract_parameters(
         prompt: str,
         function: FunctionDefinition,
@@ -134,41 +306,36 @@ def extract_parameters(
     Args:
         prompt: Natural-language request to convert into parameters.
         function: Function definition selected for the prompt.
-        model: LLM wrapper available for future constrained extraction.
+        model: LLM wrapper used for constrained argument selection.
 
     Returns:
         Extracted parameter values keyed by parameter name.
 
     Raises:
-        ValueError: If parameters cannot be extracted from the prompt.
+        ValueError: If a selected parameter value cannot be coerced.
     """
     parameters: dict[str, Any] = {}
-    numbers = extract_numbers_from_prompt(prompt)
-    quoted_strings = extract_quoted_strings_from_prompt(prompt)
-
-    number_index = 0
-    string_index = 0
 
     for parameter_name, parameter_definition in function.parameters.items():
-        if parameter_definition.type == "number":
-            if number_index >= len(numbers):
-                raise ValueError(f"missing number for {parameter_name}")
-            parameters[parameter_name] = numbers[number_index]
-            number_index += 1
-
-        if parameter_definition.type == "string":
-            if string_index < len(quoted_strings):
-                parameters[parameter_name] = quoted_strings[string_index]
-                string_index += 1
-            else:
-                words = extract_words_from_prompt(prompt)
-                parameters[parameter_name] = choose_string_argument(
-                    prompt,
-                    function,
-                    parameter_name,
-                    words,
-                    model,
-                )
+        candidates = collect_candidates_for_parameter(
+            prompt,
+            parameter_name,
+            parameter_definition,
+            parameters,
+        )
+        selected_value = choose_argument_text(
+            prompt,
+            function,
+            parameter_name,
+            parameter_definition,
+            candidates,
+            parameters,
+            model,
+        )
+        parameters[parameter_name] = coerce_argument_value(
+            selected_value,
+            parameter_definition,
+        )
 
     return parameters
 
