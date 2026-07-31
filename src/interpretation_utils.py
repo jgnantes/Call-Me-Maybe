@@ -1,9 +1,14 @@
-import re
+import argparse
+import json
 from typing import Any
 import llm_sdk as llm
 from .decoding_utils import (
-    choose_from_allowed_texts,
     choose_function,
+    generate_boolean,
+    generate_number,
+    generate_string,
+    get_generation_tokens,
+    get_input_ids,
 )
 from .models import (
     FunctionCallResult,
@@ -13,287 +18,91 @@ from .models import (
 )
 
 
-REGEX_PATTERN_CANDIDATES = [
-    r"\d+",
-    r"\D+",
-    r"[A-Z]",
-    r"[a-z]",
-    r"[aeiouAEIOU]",
-    r"\w+",
-    r"\s+",
-]
-
-
-def deduplicate_preserving_order(values: list[str]) -> list[str]:
-    """Remove duplicate strings while preserving their first occurrence.
-
-    Args:
-        values: String values to deduplicate.
-
-    Returns:
-        Deduplicated values in their original order.
-    """
-    seen: set[str] = set()
-    result: list[str] = []
-
-    for value in values:
-        clean_value = value.strip()
-        if clean_value and clean_value not in seen:
-            seen.add(clean_value)
-            result.append(clean_value)
-
-    return result
-
-
-def extract_words_from_prompt(prompt: str) -> list[str]:
-    """Extract word-like candidates from a natural-language prompt.
-
-    Args:
-        prompt: Natural-language request to inspect.
-
-    Returns:
-        Word candidates found in the prompt, preserving their order.
-    """
-    return re.findall(r"[A-Za-z_]+", prompt)
-
-
-def extract_number_texts_from_prompt(prompt: str) -> list[str]:
-    """Extract numeric strings from a natural-language prompt.
-
-    Args:
-        prompt: Natural-language request to inspect.
-
-    Returns:
-        Numeric strings found in the prompt, preserving their order.
-    """
-    return re.findall(r"-?\d+(?:\.\d+)?", prompt)
-
-
-def extract_quoted_strings_from_prompt(prompt: str) -> list[str]:
-    """Extract quoted strings from a natural-language prompt.
-
-    Args:
-        prompt: Natural-language request to inspect.
-
-    Returns:
-        Strings found between matching single or double quotes.
-    """
-    matches = re.findall(r"""(["'])(.*?)\1""", prompt)
-    return [
-        match[1]
-        for match in matches
-    ]
-
-
-def collect_text_candidates(prompt: str) -> list[str]:
-    """Collect text candidates from a prompt.
-
-    Args:
-        prompt: Natural-language request to inspect.
-
-    Returns:
-        Candidate text values found in the prompt.
-    """
-    words = prompt.split()
-    candidates: list[str] = []
-
-    candidates.extend(extract_quoted_strings_from_prompt(prompt))
-    candidates.extend(extract_number_texts_from_prompt(prompt))
-    candidates.extend(extract_words_from_prompt(prompt))
-
-    for start_index in range(1, min(len(words), 4)):
-        candidates.append(" ".join(words[start_index:]))
-
-    if ":" in prompt:
-        candidates.append(prompt.split(":", 1)[1])
-
-    candidates.append(prompt)
-
-    return deduplicate_preserving_order(candidates)
-
-
-def collect_candidates_for_parameter(
-        prompt: str,
-        parameter_name: str,
+def generate_null_json_value(
         parameter_definition: TypeDefinition,
-        selected_parameters: dict[str, Any],
-) -> list[str]:
-    """Collect candidates suitable for a specific parameter.
+) -> dict[str, Any] | list[Any] | None:
+    """Generate a fallback JSON value for unsupported structured types.
 
     Args:
-        prompt: Natural-language request to inspect.
-        parameter_name: Name of the parameter being extracted.
-        parameter_definition: Type definition for the parameter.
-        selected_parameters: Parameters already selected for this function
-            call.
-
-    Returns:
-        Candidate values for the parameter.
-    """
-    if parameter_definition.type == "number":
-        numbers = extract_number_texts_from_prompt(prompt)
-        used_numbers = {
-            str(value)
-            for value in selected_parameters.values()
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        }
-        unused_numbers = [
-            number
-            for number in numbers
-            if number not in used_numbers
-        ]
-        return unused_numbers or numbers or ["0"]
-
-    if parameter_definition.type == "boolean":
-        return ["true", "false"]
-
-    candidates = collect_text_candidates(prompt)
-
-    if parameter_name == "regex":
-        candidates = REGEX_PATTERN_CANDIDATES + candidates
-
-    if "source" in parameter_name:
-        candidates = (
-            extract_quoted_strings_from_prompt(prompt)
-            + candidates
-        )
-
-    if "replacement" in parameter_name:
-        candidates = extract_words_from_prompt(prompt) + candidates
-
-    if parameter_definition.type == "object":
-        candidates = ["{}"] + candidates
-
-    if parameter_definition.type == "array":
-        candidates = ["[]"] + candidates
-
-    return deduplicate_preserving_order(candidates)
-
-
-def build_argument_selection_prompt(
-        prompt: str,
-        function: FunctionDefinition,
-        parameter_name: str,
-        parameter_definition: TypeDefinition,
-        candidates: list[str],
-        selected_parameters: dict[str, Any],
-) -> str:
-    """Build a prompt for selecting a function argument.
-
-    Args:
-        prompt: Natural-language request containing the argument.
-        function: Function definition that expects the argument.
-        parameter_name: Name of the parameter to extract.
-        parameter_definition: Type definition for the parameter.
-        candidates: Candidate values available for selection.
-        selected_parameters: Parameters already selected for this function
-            call.
-
-    Returns:
-        Prompt asking the model to select the parameter value.
-    """
-    candidate_lines = [
-        f"- {candidate}"
-        for candidate in candidates
-    ]
-    selected_lines = [
-        f"{name} = {value}"
-        for name, value in selected_parameters.items()
-    ]
-    selected_block = "\n".join(selected_lines) or "None"
-
-    return (
-        "Select exactly one value for the current function parameter.\n"
-        "Use the user request, the selected function, and the already "
-        "selected parameters as context.\n\n"
-        f"User request:\n{prompt}\n\n"
-        f"Selected function:\n{function.name}\n\n"
-        f"Function description:\n{function.description}\n\n"
-        f"Current parameter:\n{parameter_name}\n\n"
-        f"Current parameter type:\n{parameter_definition.type}\n\n"
-        f"Already selected parameters:\n{selected_block}\n\n"
-        "Allowed values:\n"
-        + "\n".join(candidate_lines)
-        + "\n\nValue:"
-    )
-
-
-def choose_argument_text(
-        prompt: str,
-        function: FunctionDefinition,
-        parameter_name: str,
-        parameter_definition: TypeDefinition,
-        candidates: list[str],
-        selected_parameters: dict[str, Any],
-        model: llm.Small_LLM_Model,
-) -> str:
-    """Choose an argument value as text using constrained decoding.
-
-    Args:
-        prompt: Natural-language request containing the argument.
-        function: Function definition that expects the argument.
-        parameter_name: Name of the parameter to extract.
-        parameter_definition: Type definition for the parameter.
-        candidates: Candidate values available for selection.
-        selected_parameters: Parameters already selected for this function
-            call.
-        model: LLM wrapper used for constrained decoding.
-
-    Returns:
-        Selected argument value as text.
-
-    Raises:
-        ValueError: If no candidates are available.
-    """
-    if not candidates:
-        raise ValueError(f"missing candidates for {parameter_name}")
-
-    argument_prompt = build_argument_selection_prompt(
-        prompt,
-        function,
-        parameter_name,
-        parameter_definition,
-        candidates,
-        selected_parameters,
-    )
-    allowed_texts = [
-        f" {candidate}"
-        for candidate in candidates
-    ]
-
-    return choose_from_allowed_texts(
-        argument_prompt,
-        allowed_texts,
-        model,
-    ).strip()
-
-
-def coerce_argument_value(
-        value: str,
-        parameter_definition: TypeDefinition,
-) -> Any:
-    """Convert a selected argument string into its schema type.
-
-    Args:
-        value: Selected argument value as text.
         parameter_definition: Type definition expected by the schema.
 
     Returns:
-        Value converted to the expected type.
+        Empty object, empty array, or None.
     """
-    if parameter_definition.type == "number":
-        return float(value) if "." in value else int(value)
-
-    if parameter_definition.type == "boolean":
-        return value.strip().lower() == "true"
-
     if parameter_definition.type == "object":
         return {}
 
     if parameter_definition.type == "array":
         return []
 
-    return value
+    return None
+
+
+def build_argument_context(prompt: str, function: FunctionDefinition) -> str:
+    """Build the shared context used before the partial JSON object.
+
+    Args:
+        prompt: Natural-language request to convert into parameters.
+        function: Function definition selected for the prompt.
+
+    Returns:
+        Context that asks the model to extract arguments as JSON.
+    """
+    return (
+        f'User request: "{prompt}"\n'
+        f"Available function: {function.name} - {function.description}\n"
+        "Extract the arguments as a JSON object:\n"
+    )
+
+
+def generate_argument_value(
+        model: llm.Small_LLM_Model,
+        context: str,
+        parameter_definition: TypeDefinition,
+        digit_tokens: dict[str, int],
+        quote_tokens: set[int],
+) -> tuple[Any, str]:
+    """Generate one argument value and its JSON text representation.
+
+    Args:
+        model: LLM wrapper used for inference.
+        context: Text that appears immediately before the argument value.
+        parameter_definition: Type definition expected by the schema.
+        digit_tokens: Mapping between numeric characters and token IDs.
+        quote_tokens: Token IDs that contain quote characters.
+
+    Returns:
+        Generated Python value and JSON text for the partial object.
+    """
+    if parameter_definition.type == "number":
+        value = generate_number(
+            model,
+            get_input_ids(context, model),
+            digit_tokens,
+        )
+        return value, str(value)
+
+    if parameter_definition.type == "string":
+        string_context = context + '"'
+        value = generate_string(
+            model,
+            get_input_ids(string_context, model),
+            quote_tokens,
+        )
+        return value, json.dumps(value, ensure_ascii=False)
+
+    if parameter_definition.type == "boolean":
+        value = generate_boolean(model, context)
+        return value, "true" if value else "false"
+
+    value = generate_null_json_value(parameter_definition)
+    if parameter_definition.type == "object":
+        return value, "{}"
+
+    if parameter_definition.type == "array":
+        return value, "[]"
+
+    return value, "null"
 
 
 def extract_parameters(
@@ -306,36 +115,33 @@ def extract_parameters(
     Args:
         prompt: Natural-language request to convert into parameters.
         function: Function definition selected for the prompt.
-        model: LLM wrapper used for constrained argument selection.
+        model: LLM wrapper used for constrained argument generation.
 
     Returns:
         Extracted parameter values keyed by parameter name.
-
-    Raises:
-        ValueError: If a selected parameter value cannot be coerced.
     """
     parameters: dict[str, Any] = {}
+    base_context = build_argument_context(prompt, function)
+    json_so_far = "{"
+    digit_tokens, quote_tokens = get_generation_tokens(model)
+    parameter_items = list(function.parameters.items())
 
-    for parameter_name, parameter_definition in function.parameters.items():
-        candidates = collect_candidates_for_parameter(
-            prompt,
-            parameter_name,
-            parameter_definition,
-            parameters,
-        )
-        selected_value = choose_argument_text(
-            prompt,
-            function,
-            parameter_name,
-            parameter_definition,
-            candidates,
-            parameters,
+    for index, (parameter_name, parameter_definition) in enumerate(
+            parameter_items,
+    ):
+        json_so_far += f'"{parameter_name}": '
+        value, json_value = generate_argument_value(
             model,
-        )
-        parameters[parameter_name] = coerce_argument_value(
-            selected_value,
+            base_context + json_so_far,
             parameter_definition,
+            digit_tokens,
+            quote_tokens,
         )
+        parameters[parameter_name] = value
+        json_so_far += json_value
+
+        if index < len(parameter_items) - 1:
+            json_so_far += ", "
 
     return parameters
 
@@ -385,3 +191,58 @@ def interpret_prompt(
     """
     function = choose_function(prompt, functions, model)
     return build_function_call_result(prompt, function, model)
+
+
+if __name__ == "__main__":
+    from .json_utils import load_function_definition_file
+
+    parser = argparse.ArgumentParser(
+        description="Test prompts against available function definitions.",
+    )
+    parser.add_argument(
+        "--prompt",
+        action="append",
+        default=[],
+        help="Prompt to test. Can be used more than once.",
+    )
+    parser.add_argument(
+        "--function",
+        action="append",
+        default=[],
+        help="Optional function name filter. Can be used more than once.",
+    )
+    parser.add_argument(
+        "--functions-definition",
+        default="data/input/functions_definition.json",
+        help="Path to the function definitions JSON file.",
+    )
+    args = parser.parse_args()
+
+    function_file = load_function_definition_file(args.functions_definition)
+    test_functions = [
+        function
+        for function in function_file.functions
+        if not args.function or function.name in args.function
+    ]
+
+    test_prompts = args.prompt or [
+        "Reverse the sentence: Is it could in the water?",
+        'Replace all numbers in "Hello 34 I am 233 years old" with NUMBERS',
+    ]
+
+    test_model = llm.Small_LLM_Model()
+
+    for test_prompt in test_prompts:
+        print("________________________")
+        test_result = interpret_prompt(
+            test_prompt,
+            test_functions,
+            test_model,
+        )
+
+        print("Prompt:")
+        print(test_prompt)
+        print()
+        print("FunctionCallResult:")
+        print(test_result.model_dump())
+        print()
