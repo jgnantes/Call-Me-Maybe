@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from typing import Any
 import llm_sdk as llm
 from .decoding_utils import (
@@ -15,6 +16,46 @@ from .models import (
     TypeDefinition,
     validate_call_against_definition,
 )
+
+
+def extract_prompt_numbers(prompt: str) -> list[int | float]:
+    """Extract numeric literals from a prompt, preserving sign and order.
+
+    Args:
+        prompt: Natural-language request that may contain numbers.
+
+    Returns:
+        Numbers found in the prompt, ordered by appearance.
+    """
+    number_texts = re.findall(r"(?<![\w.])[+-]?\d+(?:\.\d+)?(?![\w.])", prompt)
+    numbers: list[int | float] = []
+
+    for number_text in number_texts:
+        if "." in number_text:
+            numbers.append(float(number_text))
+        else:
+            numbers.append(int(number_text))
+
+    return numbers
+
+
+def get_ordered_number_parameters(
+        function: FunctionDefinition,
+) -> list[str]:
+    """Get numeric parameter names in definition order.
+
+    Args:
+        function: Function definition whose parameters should be inspected.
+
+    Returns:
+        Names of parameters typed as numbers.
+    """
+    return [
+        parameter_name
+        for parameter_name, parameter_definition
+        in function.parameters.items()
+        if parameter_definition.type == "number"
+    ]
 
 
 def build_argument_context(prompt: str, function: FunctionDefinition) -> str:
@@ -95,18 +136,34 @@ def extract_parameters(
     json_so_far = "{"
     digit_tokens, quote_tokens = get_generation_tokens(model)
     parameter_items = list(function.parameters.items())
+    prompt_numbers = extract_prompt_numbers(prompt)
+    number_parameters = get_ordered_number_parameters(function)
 
     for index, (parameter_name, parameter_definition) in enumerate(
             parameter_items,
     ):
         json_so_far += f'"{parameter_name}": '
-        value, json_value = generate_argument_value(
-            model,
-            base_context + json_so_far,
-            parameter_definition,
-            digit_tokens,
-            quote_tokens,
-        )
+        if parameter_name in number_parameters:
+            number_index = number_parameters.index(parameter_name)
+            if number_index < len(prompt_numbers):
+                value = prompt_numbers[number_index]
+                json_value = str(value)
+            else:
+                value, json_value = generate_argument_value(
+                    model,
+                    base_context + json_so_far,
+                    parameter_definition,
+                    digit_tokens,
+                    quote_tokens,
+                )
+        else:
+            value, json_value = generate_argument_value(
+                model,
+                base_context + json_so_far,
+                parameter_definition,
+                digit_tokens,
+                quote_tokens,
+            )
         parameters[parameter_name] = value
         json_so_far += json_value
 
@@ -196,8 +253,7 @@ if __name__ == "__main__":
     ]
 
     test_prompts = args.prompt or [
-        "Reverse CAMALEOA",
-        'Make all letters uppercase in "bateu um onda forte"',
+        "How much is one plus two",
     ]
 
     test_model = getattr(llm, "Small_LLM_Model")()
