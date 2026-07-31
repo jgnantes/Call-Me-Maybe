@@ -1,12 +1,11 @@
-from typing import Optional
+from typing import Any, Optional, cast
 from .models import FunctionDefinition
-import llm_sdk as llm
 
 
 TOKEN_CACHE: dict[int, tuple[dict[str, int], set[int]]] = {}
 
 
-def get_input_ids(text: str, model: llm.Small_LLM_Model) -> list[int]:
+def get_input_ids(text: str, model: Any) -> list[int]:
     """Encode text into token IDs.
 
     Args:
@@ -16,12 +15,12 @@ def get_input_ids(text: str, model: llm.Small_LLM_Model) -> list[int]:
     Returns:
         Token IDs representing the text.
     """
-    return model.encode(text)[0].tolist()
+    return cast(list[int], model.encode(text)[0].tolist())
 
 
 def get_logits_from_text(
         text: str,
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> list[float]:
     """Get next-token logits for a text prompt.
 
@@ -32,7 +31,10 @@ def get_logits_from_text(
     Returns:
         Logit scores for every token in the model vocabulary.
     """
-    return model.get_logits_from_input_ids(get_input_ids(text, model))
+    return cast(
+        list[float],
+        model.get_logits_from_input_ids(get_input_ids(text, model)),
+    )
 
 
 def choose_next_token_id(
@@ -53,7 +55,7 @@ def choose_next_token_id(
     return max(range(len(logits)), key=logits.__getitem__)
 
 
-def get_vocabulary_size(model: llm.Small_LLM_Model) -> int:
+def get_vocabulary_size(model: Any) -> int:
     """Get the model vocabulary size.
 
     Args:
@@ -66,7 +68,7 @@ def get_vocabulary_size(model: llm.Small_LLM_Model) -> int:
 
 
 def build_digit_tokens(
-        model: llm.Small_LLM_Model,
+        model: Any,
         vocabulary_size: int,
 ) -> dict[str, int]:
     """Map single numeric characters to their token IDs.
@@ -87,7 +89,7 @@ def build_digit_tokens(
 
 
 def build_quote_tokens(
-        model: llm.Small_LLM_Model,
+        model: Any,
         vocabulary_size: int,
 ) -> set[int]:
     """Collect token IDs that contain a quote character.
@@ -107,7 +109,7 @@ def build_quote_tokens(
 
 
 def get_generation_tokens(
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> tuple[dict[str, int], set[int]]:
     """Get cached token groups used by constrained generation.
 
@@ -164,7 +166,7 @@ def parse_generated_number(text: str) -> int | float:
 
 
 def generate_number(
-        model: llm.Small_LLM_Model,
+        model: Any,
         context_ids: list[int],
         digit_tokens: dict[str, int],
         max_length: int = 20,
@@ -215,7 +217,7 @@ def generate_number(
 
 
 def generate_string(
-        model: llm.Small_LLM_Model,
+        model: Any,
         context_ids: list[int],
         quote_tokens: set[int],
         max_length: int = 80,
@@ -250,30 +252,12 @@ def generate_string(
         generated.append(next_token)
         context.append(next_token)
 
-    return model.decode(generated).strip()
-
-
-def generate_boolean(model: llm.Small_LLM_Model, context: str) -> bool:
-    """Generate a JSON boolean using constrained decoding.
-
-    Args:
-        model: LLM wrapper used for inference.
-        context: Text that appears before the boolean.
-
-    Returns:
-        Generated boolean.
-    """
-    selected = choose_from_allowed_texts(
-        context,
-        ["true", "false"],
-        model,
-    )
-    return selected == "true"
+    return cast(str, model.decode(generated).strip())
 
 
 def encode_allowed_texts(
         allowed_texts: list[str],
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> list[list[int]]:
     """Encode allowed output strings into token ID sequences.
 
@@ -293,7 +277,7 @@ def encode_allowed_texts(
 def choose_from_allowed_texts(
         prompt: str,
         allowed_texts: list[str],
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> str:
     """Choose one allowed text using constrained greedy decoding.
 
@@ -337,7 +321,7 @@ def choose_from_allowed_texts(
         )
         generated_tokens.append(next_token_id)
 
-    return model.decode(generated_tokens)
+    return cast(str, model.decode(generated_tokens))
 
 
 def build_function_selection_prompt(
@@ -370,7 +354,7 @@ def build_function_selection_prompt(
 def choose_function(
         prompt: str,
         functions: list[FunctionDefinition],
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> FunctionDefinition:
     """Choose a function name for a prompt using constrained decoding.
 
@@ -405,59 +389,3 @@ def choose_function(
             return function
 
     raise ValueError("selected function was not found")
-
-
-
-if __name__ == "__main__":
-    model = llm.Small_LLM_Model()
-    string = "Tio Chico tinha um sítio"
-    input_ids = model.encode(string)[0].tolist()
-
-    for _ in range(55):
-        logits = model.get_logits_from_input_ids(input_ids)
-        next_token_id = choose_next_token_id(logits)
-        input_ids.append(next_token_id)
-
-    print("\n\nTESTE DE COMPLETAR TEXTO")
-    print(f"\nANTES:  {string}")
-    print(f"\nDEPOIS: {model.decode(input_ids)}")
-    print()
-
-    print("\n\nTESTE DE RESPONDER PERGUNTA")
-    allowed_texts = [
-        " yes",
-        " no",
-    ]
-    allowed_token_ids = [
-        model.encode(text)[0].tolist()[0]
-        for text in allowed_texts
-    ]
-
-    question = "Is 2 plus 2 equal to 5?"
-    logits = get_logits_from_text(question, model)
-    best_allowed_token_id = max(
-        allowed_token_ids,
-        key=lambda token_id: logits[token_id],
-    )
-    print(question, model.decode([best_allowed_token_id]))
-    for token_id in allowed_token_ids:
-        print(model.decode([token_id]), logits[token_id])
-
-
-    print("\n\nTESTE DE CHAMADA DE FUNÇÃO")
-    from json_utils import load_function_definition_file
-
-    functions_file = load_function_definition_file(
-        "data/input/functions_definition.json"
-    )
-
-    prompt = "Lepetipotipola"
-    print(f"Prompt: {prompt}")
-    print("Function:", end=" ")
-    print(
-        choose_function(
-            prompt,
-            functions_file.functions,
-            model,
-        ).name,
-    )

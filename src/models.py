@@ -1,4 +1,4 @@
-from typing import Literal, Any
+from typing import Any, Literal
 from pydantic import BaseModel, model_validator, ConfigDict
 
 
@@ -26,7 +26,7 @@ class PromptInput(BaseModel):
     prompt: str
 
     @model_validator(mode='after')
-    def validate_empty_prompt(self):
+    def validate_empty_prompt(self) -> "PromptInput":
         """Validate that the prompt is not empty.
 
         Args:
@@ -53,7 +53,7 @@ class PromptInputFile(BaseModel):
     prompts: list[PromptInput]
 
     @model_validator(mode="after")
-    def validate_prompt_input_file(self):
+    def validate_prompt_input_file(self) -> "PromptInputFile":
         """Validate that the prompt input file is not empty.
 
         Returns:
@@ -70,7 +70,7 @@ class TypeDefinition(BaseModel):
         type: JSON-compatible type name.
     """
 
-    type: Literal["string", "number", "boolean", "object", "array"]
+    type: Literal["string", "number"]
 
 
 class FunctionDefinition(BaseModel):
@@ -89,14 +89,15 @@ class FunctionDefinition(BaseModel):
     returns: TypeDefinition
 
     @model_validator(mode="after")
-    def validate_function_definition(self):
+    def validate_function_definition(self) -> "FunctionDefinition":
         """Validate that the function definition is complete.
 
         Returns:
             The validated function definition.
 
         Raises:
-            ValueError: If required textual fields or parameter names are empty.
+            ValueError: If required textual fields or parameter names are
+                empty.
         """
         if not self.name.strip():
             raise ValueError("function name must not be empty")
@@ -118,7 +119,7 @@ class FunctionDefinitionFile(BaseModel):
     functions: list[FunctionDefinition]
 
     @model_validator(mode="after")
-    def validate_function_definition_file(self):
+    def validate_function_definition_file(self) -> "FunctionDefinitionFile":
         """Validate that function definitions are usable.
 
         Returns:
@@ -150,7 +151,7 @@ class FunctionCallResult(BaseModel):
     parameters: dict[str, Any]
 
     @model_validator(mode="after")
-    def validate_function_call_result(self):
+    def validate_function_call_result(self) -> "FunctionCallResult":
         """Validate that the generated function call result is complete.
 
         Returns:
@@ -200,29 +201,12 @@ def validate_call_against_definition(
     for parameter_name, parameter_definition in function.parameters.items():
         value = call.parameters[parameter_name]
 
-        if parameter_definition.type == "string" and not isinstance(value, str):
+        if (
+                parameter_definition.type == "string"
+                and not isinstance(value, str)
+        ):
             raise ValueError(f"{parameter_name} must be a string")
 
         if parameter_definition.type == "number":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise ValueError(f"{parameter_name} must be a number")
-
-        if parameter_definition.type == "boolean":
-            if not isinstance(value, bool):
-                raise ValueError(f"{parameter_name} must be a boolean")
-
-        if parameter_definition.type == "object":
-            if not isinstance(value, dict):
-                raise ValueError(f"{parameter_name} must be an object")
-
-        if parameter_definition.type == "array":
-            if not isinstance(value, list):
-                raise ValueError(f"{parameter_name} must be an array")
-
-
-if __name__=="__main__":
-    try:
-        test = PromptInput(prompt="tio chico tinha um sítio")
-        print(test.prompt)
-    except ValueError as e:
-        print(e)

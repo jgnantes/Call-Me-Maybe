@@ -1,8 +1,6 @@
 import argparse
 import sys
-
 import llm_sdk as llm
-
 from . import interpretation_utils as iu
 from . import json_utils as ju
 
@@ -51,7 +49,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
     )
     prompt_file = ju.load_prompt_input_file(args.input)
 
-    model = llm.Small_LLM_Model()
+    model = getattr(llm, "Small_LLM_Model")()
 
     results = [
         iu.interpret_prompt(

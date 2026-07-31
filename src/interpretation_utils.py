@@ -4,7 +4,6 @@ from typing import Any
 import llm_sdk as llm
 from .decoding_utils import (
     choose_function,
-    generate_boolean,
     generate_number,
     generate_string,
     get_generation_tokens,
@@ -16,26 +15,6 @@ from .models import (
     TypeDefinition,
     validate_call_against_definition,
 )
-
-
-def generate_null_json_value(
-        parameter_definition: TypeDefinition,
-) -> dict[str, Any] | list[Any] | None:
-    """Generate a fallback JSON value for unsupported structured types.
-
-    Args:
-        parameter_definition: Type definition expected by the schema.
-
-    Returns:
-        Empty object, empty array, or None.
-    """
-    if parameter_definition.type == "object":
-        return {}
-
-    if parameter_definition.type == "array":
-        return []
-
-    return None
 
 
 def build_argument_context(prompt: str, function: FunctionDefinition) -> str:
@@ -56,7 +35,7 @@ def build_argument_context(prompt: str, function: FunctionDefinition) -> str:
 
 
 def generate_argument_value(
-        model: llm.Small_LLM_Model,
+        model: Any,
         context: str,
         parameter_definition: TypeDefinition,
         digit_tokens: dict[str, int],
@@ -75,40 +54,31 @@ def generate_argument_value(
         Generated Python value and JSON text for the partial object.
     """
     if parameter_definition.type == "number":
-        value = generate_number(
+        number_value = generate_number(
             model,
             get_input_ids(context, model),
             digit_tokens,
         )
-        return value, str(value)
+        return number_value, str(number_value)
 
     if parameter_definition.type == "string":
         string_context = context + '"'
-        value = generate_string(
+        string_value = generate_string(
             model,
             get_input_ids(string_context, model),
             quote_tokens,
         )
-        return value, json.dumps(value, ensure_ascii=False)
+        return string_value, json.dumps(string_value, ensure_ascii=False)
 
-    if parameter_definition.type == "boolean":
-        value = generate_boolean(model, context)
-        return value, "true" if value else "false"
-
-    value = generate_null_json_value(parameter_definition)
-    if parameter_definition.type == "object":
-        return value, "{}"
-
-    if parameter_definition.type == "array":
-        return value, "[]"
-
-    return value, "null"
+    raise ValueError(
+        f"unsupported parameter type: {parameter_definition.type}"
+    )
 
 
 def extract_parameters(
         prompt: str,
         function: FunctionDefinition,
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> dict[str, Any]:
     """Extract function parameters from a natural-language prompt.
 
@@ -149,7 +119,7 @@ def extract_parameters(
 def build_function_call_result(
         prompt: str,
         function: FunctionDefinition,
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> FunctionCallResult:
     """Build a validated function call result for a prompt.
 
@@ -177,7 +147,7 @@ def build_function_call_result(
 def interpret_prompt(
         prompt: str,
         functions: list[FunctionDefinition],
-        model: llm.Small_LLM_Model,
+        model: Any,
 ) -> FunctionCallResult:
     """Interpret a prompt as a validated function call.
 
@@ -226,11 +196,11 @@ if __name__ == "__main__":
     ]
 
     test_prompts = args.prompt or [
-        "Reverse the sentence: Is it could in the water?",
-        'Replace all numbers in "Hello 34 I am 233 years old" with NUMBERS',
+        "Reverse CAMALEOA",
+        'Make all letters uppercase in "bateu um onda forte"',
     ]
 
-    test_model = llm.Small_LLM_Model()
+    test_model = getattr(llm, "Small_LLM_Model")()
 
     for test_prompt in test_prompts:
         print("________________________")

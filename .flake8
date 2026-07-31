@@ -1,0 +1,14 @@
+[flake8]
+max-line-length = 79
+exclude =
+    .git,
+    .mypy_cache,
+    .pytest_cache,
+    .ruff_cache,
+    .uv-cache,
+    .venv,
+    __pycache__,
+    data,
+    huggingface-env,
+    llm_sdk,
+    zip

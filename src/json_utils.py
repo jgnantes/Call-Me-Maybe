@@ -69,7 +69,9 @@ def load_function_definition_file(path: str) -> FunctionDefinitionFile:
     try:
         return FunctionDefinitionFile(functions=data)
     except ValidationError as error:
-        raise ValueError(f"invalid function definition file: {path}") from error
+        raise ValueError(
+            f"invalid function definition file: {path}"
+        ) from error
 
 
 def dump_function_call_results(
@@ -96,20 +98,3 @@ def dump_function_call_results(
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(data, file, indent=2, ensure_ascii=False)
         file.write("\n")
-
-
-if __name__=="__main__":
-    inputs = load_prompt_input_file("data/input/function_calling_tests.json")
-    print(inputs.prompts[0].prompt)
-    outputs = load_function_definition_file(
-        "data/input/functions_definition.json")
-    print(outputs.functions[0].parameters)
-    result = FunctionCallResult(
-        prompt="what is 2 plus 2 equal to?",
-        name="fn_add_numbers",
-        parameters={"a": 2, "b": 2},
-    )
-    dump_function_call_results(
-        "data/output/test.json",
-        [result],
-    )
