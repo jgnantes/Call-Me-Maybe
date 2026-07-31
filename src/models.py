@@ -70,7 +70,7 @@ class TypeDefinition(BaseModel):
         type: JSON-compatible type name.
     """
 
-    type: Literal["string", "number"]
+    type: Literal["string", "number", "boolean"]
 
 
 class FunctionDefinition(BaseModel):
@@ -210,3 +210,9 @@ def validate_call_against_definition(
         if parameter_definition.type == "number":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise ValueError(f"{parameter_name} must be a number")
+
+        if (
+                parameter_definition.type == "boolean"
+                and not isinstance(value, bool)
+        ):
+            raise ValueError(f"{parameter_name} must be a boolean")

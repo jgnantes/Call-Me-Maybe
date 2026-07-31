@@ -5,6 +5,7 @@ from typing import Any
 import llm_sdk as llm
 from .decoding_utils import (
     choose_function,
+    generate_boolean,
     generate_number,
     generate_string,
     get_generation_tokens,
@@ -110,6 +111,10 @@ def generate_argument_value(
             quote_tokens,
         )
         return string_value, json.dumps(string_value, ensure_ascii=False)
+
+    if parameter_definition.type == "boolean":
+        boolean_value = generate_boolean(model, context)
+        return boolean_value, json.dumps(boolean_value)
 
     raise ValueError(
         f"unsupported parameter type: {parameter_definition.type}"
@@ -253,7 +258,9 @@ if __name__ == "__main__":
     ]
 
     test_prompts = args.prompt or [
-        "How much is one plus two",
+        "Disable notifications for Pedro",
+        "Enable notifications for Maria",
+        "How much is one plus fourty two thousand million"
     ]
 
     test_model = getattr(llm, "Small_LLM_Model")()

@@ -63,6 +63,7 @@ class Small_LLM_Model:
         self._model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=self._dtype,
+            device_map="auto" if self._device == "cuda" else None,
             trust_remote_code=trust_remote_code,
         )
         self._model.to(self._device)

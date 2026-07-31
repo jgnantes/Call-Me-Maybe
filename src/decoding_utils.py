@@ -324,6 +324,27 @@ def choose_from_allowed_texts(
     return cast(str, model.decode(generated_tokens))
 
 
+def generate_boolean(
+        model: Any,
+        context: str,
+) -> bool:
+    """Generate a JSON boolean using constrained decoding.
+
+    Args:
+        model: LLM wrapper used for inference and tokenization.
+        context: Text that appears immediately before the boolean value.
+
+    Returns:
+        Boolean selected by the model from the valid JSON literals.
+    """
+    generated = choose_from_allowed_texts(
+        context,
+        ["true", "false"],
+        model,
+    )
+    return generated == "true"
+
+
 def build_function_selection_prompt(
         prompt: str,
         functions: list[FunctionDefinition],
